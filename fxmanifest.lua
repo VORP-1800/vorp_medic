@@ -7,17 +7,21 @@ description 'A medical scrpt for vorp core framework'
 repository 'https://github.com/VORPCORE/vorp_medic'
 lua54 'yes'
 
-shared_scripts {
-    'configs/config.lua',
-    'languages/translation.lua'
-}
+shared_script '@vorp_lib/import.lua'
+
 client_script 'client/main.lua'
+
 server_scripts {
     'server/main.lua',
     'configs/logs.lua',
-
 }
-version '0.2'
+
+files {
+    'configs/config.lua',
+    'languages/translation.lua',
+}
+
+version '0.3'
 vorp_checker 'yes'
 vorp_name '^4Resource version Check^3'
 vorp_github 'https://github.com/VORPCORE/vorp_medic'

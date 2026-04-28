@@ -1,4 +1,5 @@
-Translation = {}
+---@class vorp_medic_translation
+local Translation = {}
 
 Translation.Langs = {
     English = {
@@ -12,6 +13,7 @@ Translation.Langs = {
             OpenDoctorMenu = "Open Doctor Menu",
             Press = "Press",
             SubMenu = "SubMenu",
+            PressEnter = "Press Enter",
         },
         Teleport = {
             TeleportTo = "Teleport to",
@@ -76,6 +78,7 @@ Translation.Langs = {
             OpenDoctorMenu = "Abrir Menú de Doctor",
             Press = "Presionar",
             SubMenu = "SubMenú",
+            PressEnter = "Presiona Enter",
         },
         Teleport = {
             TeleportTo = "Teletransportarse a",
@@ -130,4 +133,8 @@ Translation.Langs = {
         }
     },
     -- Add your language here and open a PR to merge other languages to the main repo
+}
+
+return {
+    Translation = Translation,
 }

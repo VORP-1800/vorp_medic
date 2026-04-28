@@ -1,8 +1,20 @@
-local Core                  = exports.vorp_core:GetCore()
-local Inv                   = exports.vorp_inventory
-local T <const>             = Translation.Langs[Config.Lang]
-local JobsToAlert <const>   = {}
-local PlayersAlerts <const> = {}
+local Lib <const>         = Import({ "/configs/config", "/languages/translation", "/configs/logs" })
+local Config <const>      = Lib.Config --[[@as vorp_medic]]
+local Translation <const> = Lib.Translation --[[@as vorp_medic_translation]]
+local Logs <const>        = Lib.Logs
+
+local Core <const>        = exports.vorp_core:GetCore()
+local Inv <const>         = exports.vorp_inventory
+local T <const>           = Translation.Langs[Config.Lang]
+if not T then return print('Translation not found for ' .. Config.Lang) end
+
+local JobsToAlert <const>     = {}
+local PlayersAlerts <const>   = {}
+local DutyList <const>        = {}
+
+local GetEntityCoords <const> = GetEntityCoords
+local GetPlayerPed <const>    = GetPlayerPed
+
 
 local function registerStorage(prefix, name, limit)
     local isInvRegstered <const> = Inv:isCustomInventoryRegistered(prefix)
@@ -27,11 +39,11 @@ end
 
 local function hasJob(user)
     local Character <const> = user.getUsedCharacter
-    return Config.MedicJobs[Character.job]
+    return Config.DoctorJobs[Character.job]
 end
 
 local function isOnDuty(source)
-    return Player(source).state.isMedicDuty
+    return DutyList[source]
 end
 
 local function isPlayerNear(source, target)
@@ -49,26 +61,6 @@ local function openDoctorMenu(source)
         return Core.NotifyObjective(source, T.Jobs.YouAreNotADoctor, 5000)
     end
     TriggerClientEvent('vorp_medic:Client:OpenMedicMenu', source)
-end
-
-local function getClosestPlayer(source)
-    local players <const> = GetPlayers()
-    local ent <const> = GetPlayerPed(source)
-    local doctorCoords <const> = GetEntityCoords(ent)
-    local closestDistance = math.huge
-    local closestPlayer = nil
-
-    for _, value in ipairs(players) do
-        if tonumber(value) ~= source then
-            local targetCoords <const> = GetEntityCoords(GetPlayerPed(value))
-            local distance <const> = #(doctorCoords - targetCoords)
-            if distance <= closestDistance then
-                closestDistance = distance
-                closestPlayer = value
-            end
-        end
-    end
-    return closestPlayer
 end
 
 local function getSourceInfo(user, _source)
@@ -143,23 +135,22 @@ end)
 --* ON PLAYER SPAWN
 AddEventHandler("vorp:SelectedCharacter", function(source, char)
     if Config.DevMode then return end
-    if not Config.MedicJobs[char.job] then return end
+    if not Config.DoctorJobs[char.job] then return end
     TriggerClientEvent("chat:addSuggestion", source, "/" .. Config.DoctorMenuCommand, T.Menu.OpenDoctorMenu, {})
     RegisterCommand(Config.DoctorMenuCommand, openDoctorMenu, false)
 end)
 
 --* HIRE PLAYER
-RegisterNetEvent("vorp_medic:server:hirePlayer", function(id, job)
+RegisterNetEvent("vorp_medic:server:hirePlayer", function(id, job, grade)
     local _source <const> = source
     local user <const> = Core.getUser(_source)
     if not user then return end
-
-    if not hasJob(user) then
+    local Character <const> = user.getUsedCharacter
+    local jobGrade <const> = Character.jobGrade
+    local v <const> = hasJob(user)?[jobGrade]
+    if not v or not (v.allowAll or v.CanHire) then
         return Core.NotifyObjective(_source, T.Jobs.YouAreNotADoctor, 5000)
     end
-
-    local label <const> = Config.JobLabels[job]
-    if not label then return print(T.Jobs.Nojoblabel) end
 
     local target <const> = id
     local targetUser <const> = Core.getUser(target)
@@ -167,6 +158,10 @@ RegisterNetEvent("vorp_medic:server:hirePlayer", function(id, job)
 
     local targetCharacter <const> = targetUser.getUsedCharacter
     local targetJob <const> = targetCharacter.job
+
+    local label <const> = Config.DoctorJobs[job]?[grade]?.label
+    if not label then return print(T.Jobs.Nojoblabel) end
+
     if job == targetJob then
         return Core.NotifyObjective(_source, T.Player.PlayeAlreadyHired .. label, 5000)
     end
@@ -176,6 +171,7 @@ RegisterNetEvent("vorp_medic:server:hirePlayer", function(id, job)
     end
 
     targetCharacter.setJob(job, true)
+    targetCharacter.setJobGrade(grade, true)
     targetCharacter.setJobLabel(label, true)
 
     Core.NotifyObjective(target, T.Player.HireedPlayer .. label, 5000)
@@ -201,7 +197,10 @@ RegisterNetEvent("vorp_medic:server:firePlayer", function(id)
     local user <const> = Core.getUser(_source)
     if not user then return end
 
-    if not hasJob(user) then
+    local Character <const> = user.getUsedCharacter
+    local jobGrade <const> = Character.jobGrade
+    local v <const> = hasJob(user)?[jobGrade]
+    if not v or not (v.allowAll or v.CanHire) then
         return Core.NotifyObjective(_source, T.Jobs.YouAreNotADoctor, 5000)
     end
 
@@ -211,11 +210,12 @@ RegisterNetEvent("vorp_medic:server:firePlayer", function(id)
 
     local targetCharacter <const> = targetUser.getUsedCharacter
     local targetJob <const> = targetCharacter.job
-    if not Config.MedicJobs[targetJob] then
+    if hasJob(targetUser) then
         return Core.NotifyObjective(_source, T.Player.CantFirenotHired, 5000)
     end
 
     targetCharacter.setJob("unemployed", true)
+    targetCharacter.setJobGrade(0, true)
     targetCharacter.setJobLabel("Unemployed", true)
 
     Core.NotifyObjective(target, T.Player.BeenFireed, 5000)
@@ -223,6 +223,7 @@ RegisterNetEvent("vorp_medic:server:firePlayer", function(id)
 
     if isOnDuty(target) then
         Player(target).state:set('isMedicDuty', nil, true)
+        DutyList[target] = nil
     end
 
     TriggerClientEvent("vorp_medic:Client:JobUpdate", target)
@@ -259,12 +260,14 @@ Core.Callback.Register("vorp_medic:server:checkDuty", function(source, CB, _)
             JobsToAlert[source] = true
         end
         Player(source).state:set('isMedicDuty', true, true)
+        DutyList[source] = true
         return CB(true)
     else
         if JobsToAlert[source] then
             JobsToAlert[source] = nil
         end
         Player(source).state:set('isMedicDuty', false, true)
+        DutyList[source] = nil
 
         description = description .. "**" .. Logs.Lang.JobOffDuty .. "**"
         Core.AddWebhook(Logs.Lang.JobOffDuty, Logs.DutyWebhook, description, Logs.color, Logs.Namelogs, Logs.logo, Logs.footerlogo, Logs.Avatar)
@@ -277,11 +280,54 @@ end)
 
 --* ON PLAYER JOB CHANGE
 AddEventHandler("vorp:playerJobChange", function(source, new, _)
-    if not Config.MedicJobs[new] then return end
+    if not Config.DoctorJobs[new] then return end
     TriggerClientEvent("vorp_medic:Client:JobUpdate", source)
 end)
 
+local function getClosestPlayer(source, isHeal)
+    local players <const> = GetPlayers()
+    local ent <const> = GetPlayerPed(source)
+    local doctorCoords <const> = GetEntityCoords(ent)
+    local closestDistance = math.huge
+    local closestPlayer = nil
+
+    for _, value in ipairs(players) do
+        if tonumber(value) ~= source then
+            local targetCoords <const> = GetEntityCoords(GetPlayerPed(value))
+            local distance <const> = #(doctorCoords - targetCoords)
+            if distance <= closestDistance then
+                closestDistance = distance
+                closestPlayer = value
+            end
+        end
+    end
+
+    -- allow medics to self heal?
+    if isHeal and not closestPlayer then
+        return source
+    end
+
+    return closestPlayer
+end
+
 CreateThread(function()
+    if Core.RegisterJobs then
+        local jobsData <const> = {}
+        for job, value in pairs(Config.DoctorJobs) do
+            jobsData[job] = {}
+            -- only if grades are used
+            jobsData[job].grades = {}
+            for grade, v in pairs(value) do
+                jobsData[job].grades[grade] = {}
+                jobsData[job].grades[grade].label = v.label
+            end
+        end
+        Core.RegisterJobs(jobsData, GetCurrentResourceName())
+    else
+        -- wait for some time to print this
+        -- print("^1vorp_medic: server: RegisterJobs not found update vorp core to the latest version^7")
+    end
+
     for key, value in pairs(Config.Items) do
         Inv:registerUsableItem(key, function(data)
             local _source <const> = data.source
@@ -306,7 +352,7 @@ CreateThread(function()
                     Core.Player.Revive(tonumber(closestPlayer))
                 end)
             else
-                local closestPlayer <const> = getClosestPlayer(_source)
+                local closestPlayer <const> = getClosestPlayer(_source, true)
                 if not closestPlayer then return Core.NotifyObjective(_source, T.Player.NoPlayerFoundToRevive, 5000) end
 
                 TriggerClientEvent("vorp_medic:Client:HealAnim", _source)
@@ -314,7 +360,7 @@ CreateThread(function()
             end
 
             Inv:subItemById(_source, data.item.id)
-        end)
+        end, GetCurrentResourceName())
     end
 end)
 
@@ -332,10 +378,7 @@ local function isDoctorOnCall(source)
 end
 
 local function getDoctorFromCall(source)
-    if PlayersAlerts[source] then
-        return PlayersAlerts[source]
-    end
-    return 0
+    return PlayersAlerts[source] or 0
 end
 
 local function getPlayerFromCall(source)
@@ -446,21 +489,31 @@ end, false)
 AddEventHandler("playerDropped", function()
     local _source = source
 
-    if Player(_source).state.isMedicDuty then
-        Player(_source).state:set('isMedicDuty', nil, true)
-    end
-
-    if JobsToAlert[_source] then
-        JobsToAlert[_source] = nil
-    end
-
     local isOnCall <const>, doctor <const> = isDoctorOnCall(_source)
     if isOnCall and doctor > 0 then
         TriggerClientEvent("vorp_medic:Client:RemoveBlip", doctor)
         Core.NotifyObjective(doctor, T.Alert.PlayerDisconnectedAlertCanceled, 5000)
     end
 
+    if DutyList[_source] then
+        DutyList[_source] = nil
+    end
+
+    if JobsToAlert[_source] then
+        JobsToAlert[_source] = nil
+    end
+
     if PlayersAlerts[_source] then
         PlayersAlerts[_source] = nil
     end
+end)
+
+--* EXPORTS
+--TODO: ADD TO READ ME
+exports("isOnDuty", function(source)
+    return DutyList[source]
+end)
+
+exports("getDoctorFromCall", function(source)
+    return getDoctorFromCall(source)
 end)
